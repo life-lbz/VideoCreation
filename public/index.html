@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="obsidian">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="FrameFlow，一句话生成专业视频的 AI 创作平台。" />
+    <link rel="icon" href="data:," />
+    <title>FrameFlow | 一句话生成专业视频</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="FrameFlow 首页">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>FrameFlow</span>
+        </a>
+        <nav class="top-actions" aria-label="账户与显示设置">
+          <span class="service-status"><span class="status-signal" aria-hidden="true"></span>服务可用</span>
+          <div class="theme-picker">
+            <button class="theme-trigger" id="theme-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-menu">
+              <span class="theme-swatch" aria-hidden="true"></span>
+              <span id="theme-current">曜石黑</span>
+              <span class="theme-chevron" aria-hidden="true"></span>
+            </button>
+            <div class="theme-menu" id="theme-menu" role="menu" aria-label="切换界面主题" hidden>
+              <button type="button" role="menuitemradio" data-theme-value="obsidian" aria-checked="true"><span class="theme-dot dot-obsidian" aria-hidden="true"></span><span><strong>曜石黑</strong><small>沉浸创作</small></span><i aria-hidden="true">选中</i></button>
+              <button type="button" role="menuitemradio" data-theme-value="cloud" aria-checked="false"><span class="theme-dot dot-cloud" aria-hidden="true"></span><span><strong>云境白</strong><small>明亮清晰</small></span><i aria-hidden="true">选中</i></button>
+              <button type="button" role="menuitemradio" data-theme-value="oriental" aria-checked="false"><span class="theme-dot dot-oriental" aria-hidden="true"></span><span><strong>东方绛</strong><small>温润深色</small></span><i aria-hidden="true">选中</i></button>
+            </div>
+          </div>
+          <button class="credit-balance" id="credit-button" type="button" aria-label="查看剩余额度">
+            <span>可用额度</span>
+            <strong id="credit-value">128</strong>
+          </button>
+        </nav>
+      </header>
+
+      <aside class="sidebar" aria-label="主导航">
+        <nav class="side-nav">
+          <a class="nav-item active" href="#create" aria-current="page"><span class="nav-glyph">创</span><span>开始创作</span></a>
+          <a class="nav-item" href="#works"><span class="nav-glyph">作</span><span>我的作品</span><span class="nav-count" id="work-count">3</span></a>
+          <a class="nav-item" href="#templates" data-panel="templates"><span class="nav-glyph">模</span><span>灵感模板</span></a>
+          <a class="nav-item" href="#assets" data-panel="assets"><span class="nav-glyph">材</span><span>品牌素材</span></a>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="usage-copy"><span>本月创作额度</span><strong><span id="used-credit">0</span> / <span id="credit-limit">0</span></strong></div>
+          <div class="usage-track" id="usage-track" aria-label="本月额度使用情况"><span id="usage-bar"></span></div>
+          <button class="upgrade-button" id="upgrade-button" type="button">升级创作套餐</button>
+          <nav aria-label="辅助导航">
+            <a class="nav-item compact" href="#billing" data-panel="billing"><span class="nav-glyph">账</span><span>套餐与账单</span></a>
+            <a class="nav-item compact" href="#help" data-panel="help"><span class="nav-glyph">助</span><span>使用帮助</span></a>
+          </nav>
+        </div>
+      </aside>
+
+      <main id="main-content" class="main-content">
+        <section class="creation-header" id="create">
+          <div>
+            <p class="eyebrow">AI VIDEO STUDIO</p>
+            <h1>把想法，直接变成镜头。</h1>
+            <p>描述你想看到的画面，创作 Agent 会完成镜头、光影与节奏设计。</p>
+          </div>
+          <button class="history-button" type="button" id="new-creation">新建创作</button>
+        </section>
+
+        <section class="studio-grid" aria-label="视频创作工作台">
+          <article class="composer-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="step-index">01</span>
+                <h2>描述你的画面</h2>
+              </div>
+              <button class="text-button" id="enhance-button" type="button">智能润色</button>
+            </div>
+
+            <form id="generation-form">
+              <label class="prompt-field" for="prompt-input">
+                <textarea id="prompt-input" name="prompt" maxlength="1200" placeholder="例如：雨后的江南庭院，一只白瓷香水瓶放在青石台上，镜头缓慢推进，氛围高级克制……" required></textarea>
+                <span class="prompt-footer">
+                  <span id="prompt-hint">写清主体、场景和动作，生成效果会更稳定</span>
+                  <span><span id="char-count">0</span> / 1200</span>
+                </span>
+              </label>
+              <div class="inspiration-row" aria-label="提示词示例">
+                <span>试试</span>
+                <button type="button" class="idea-chip" data-prompt="清晨的海边公路，一辆银色跑车沿海岸线飞驰，低机位跟拍，阳光穿过薄雾，电影广告质感。">汽车广告</button>
+                <button type="button" class="idea-chip" data-prompt="一只橘猫坐在宇宙飞船驾驶舱里穿越星云，镜头从侧面缓慢环绕，画面精致有趣，动画电影风格。">奇幻想象</button>
+                <button type="button" class="idea-chip" data-prompt="黑色岩石上的透明香水瓶，水流从瓶身两侧穿过，冷调柔光，缓慢推进，奢华商业摄影风格。">产品大片</button>
+              </div>
+
+              <div class="settings-section">
+                <div class="setting-group">
+                  <span class="setting-label">画面比例</span>
+                  <div class="segmented-control" data-setting="ratio">
+                    <button type="button" data-value="9:16" class="selected">9:16 <small>竖屏</small></button>
+                    <button type="button" data-value="16:9">16:9 <small>横屏</small></button>
+                    <button type="button" data-value="1:1">1:1 <small>方形</small></button>
+                  </div>
+                </div>
+                <div class="setting-group">
+                  <span class="setting-label">视频时长</span>
+                  <div class="segmented-control compact-control" data-setting="duration">
+                    <button type="button" data-value="5" class="selected">5 秒</button>
+                    <button type="button" data-value="8">8 秒</button>
+                    <button type="button" data-value="10">10 秒</button>
+                    <button type="button" data-value="15">15 秒</button>
+                  </div>
+                </div>
+                <div class="setting-group full-width">
+                  <span class="setting-label">输出清晰度</span>
+                  <div class="mode-options" data-setting="resolution">
+                    <button type="button" data-value="480p">
+                      <strong>480p</strong><span>最低成本预览</span>
+                    </button>
+                    <button type="button" data-value="720p" class="selected">
+                      <strong>720p</strong><span>推荐，Fast 模型</span>
+                    </button>
+                    <button type="button" data-value="1080p">
+                      <strong>1080p</strong><span>高清，成本较高</span>
+                    </button>
+                  </div>
+                  <label class="audio-option" for="audio-toggle">
+                    <span><strong>同步生成声音</strong><small>关闭更省成本，需要对白或音效时再开启</small></span>
+                    <input id="audio-toggle" type="checkbox" role="switch" aria-label="同步生成声音" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="estimate-row" aria-live="polite">
+                <span>本次预计消耗</span>
+                <strong><span id="estimate-credit">4</span> 创作额度</strong>
+                <span class="cost-hint" id="cost-hint">省钱模式</span>
+                <span class="estimate-time">预计 <span id="estimate-time">45</span> 秒</span>
+              </div>
+
+              <p class="inline-error" id="form-error" role="alert" hidden></p>
+              <button class="primary-button" id="generate-button" type="submit">
+                <span class="button-label">生成视频</span>
+                <span class="button-detail">开始创作</span>
+              </button>
+            </form>
+          </article>
+
+          <article class="preview-panel" aria-live="polite">
+            <div class="panel-heading preview-heading">
+              <div>
+                <span class="step-index">02</span>
+                <h2>创作预览</h2>
+              </div>
+              <span class="model-label">Fast 省钱模型</span>
+            </div>
+
+            <div class="preview-stage ratio-vertical" id="preview-stage">
+              <div class="preview-empty" id="preview-empty">
+                <div class="frame-motif" aria-hidden="true"><span></span><span></span><span></span></div>
+                <h3>你的下一支视频在这里诞生</h3>
+                <p>输入创意并开始生成，过程中可以离开此页面。</p>
+              </div>
+              <div class="preview-loading" id="preview-loading" hidden>
+                <div class="generation-visual" aria-hidden="true"><span></span><span></span><span></span></div>
+                <strong id="stage-label">正在理解创作意图</strong>
+                <p id="stage-description">Agent 正在规划镜头语言与画面节奏</p>
+                <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-track"><span id="progress-bar"></span></div>
+                <small id="progress-copy">准备中</small>
+                <button class="cancel-button" id="cancel-button" type="button">取消任务</button>
+              </div>
+              <div class="preview-failure" id="preview-failure" hidden>
+                <div class="failure-mark" aria-hidden="true">!</div>
+                <strong id="failure-title">视频生成失败</strong>
+                <p id="failure-message">请检查模型权限与账户状态后重试。</p>
+                <div class="failure-actions">
+                  <a class="download-button" id="failure-action" target="_blank" rel="noopener noreferrer" hidden>前往火山方舟处理</a>
+                  <button class="secondary-button" id="retry-button" type="button">处理后重新生成</button>
+                </div>
+              </div>
+              <div class="preview-result" id="preview-result" hidden>
+                <video id="result-video" muted loop playsinline controls preload="metadata" aria-label="生成的视频预览">
+                  <source src="/assets/demo-loop.mp4" type="video/mp4" />
+                </video>
+                <div class="result-actions">
+                  <button class="secondary-button" id="variant-button" type="button">生成同款变体</button>
+                  <a class="download-button" id="download-button" href="/assets/demo-loop.mp4" download="frameflow-demo.mp4">下载视频</a>
+                </div>
+              </div>
+            </div>
+
+            <div class="preview-meta">
+              <div><span>输出规格</span><strong id="output-spec">9:16 · 5 秒 · 720p</strong></div>
+              <div><span>隐私设置</span><strong>仅自己可见</strong></div>
+            </div>
+          </article>
+        </section>
+
+        <section class="recent-section" id="works">
+          <div class="section-heading">
+            <div><h2>最近创作</h2><p>继续修改、生成变体或下载已经完成的作品。</p></div>
+            <button class="text-button" id="all-works-button" type="button">查看全部作品</button>
+          </div>
+          <div class="works-grid" id="works-grid" aria-live="polite">
+            <div class="works-empty"><strong>正在加载作品</strong><p>正在从本地作品库同步真实创作记录。</p></div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <dialog class="app-dialog" id="app-dialog" aria-labelledby="dialog-title">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div><span class="dialog-kicker" id="dialog-kicker">FRAMEFLOW</span><h2 id="dialog-title">功能面板</h2></div>
+          <button class="dialog-close" id="dialog-close" type="button" aria-label="关闭面板">关闭</button>
+        </header>
+        <div class="dialog-content" id="dialog-content"></div>
+      </div>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

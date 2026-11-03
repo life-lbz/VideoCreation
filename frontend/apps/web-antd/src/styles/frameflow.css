@@ -1,0 +1,138 @@
+:root {
+  --ff-accent: #7a80f3;
+  --ff-surface: #171923;
+  --ff-muted: #202330;
+  --ff-border: #343745;
+  --ff-text: #eceef8;
+  --ff-success: #55be95;
+  --ff-warning: #e1af5b;
+  --ff-danger: #e3656f;
+}
+:root[data-frameflow-theme='cloud'] {
+  --ff-surface: #fff;
+  --ff-muted: #f1f3f8;
+  --ff-border: #dce0e8;
+  --ff-text: #232633;
+  --ff-accent: #6268dc;
+}
+:root[data-frameflow-theme='oriental'] {
+  --ff-surface: #211b1e;
+  --ff-muted: #302327;
+  --ff-border: #50343a;
+  --ff-text: #f3e6e2;
+  --ff-accent: #c85a61;
+}
+.ff-page {
+  padding: 28px;
+  max-width: 1500px;
+  margin: auto;
+  color: var(--ff-text);
+  min-width: 0;
+}
+.ff-page h1 {
+  font-size: 28px;
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+.ff-page h2 {
+  font-size: 20px;
+  margin: 24px 0 16px;
+}
+.ff-page h3 {
+  font-size: 17px;
+  margin: 16px 0 8px;
+}
+.ff-lead {
+  opacity: 0.65;
+  margin-bottom: 26px;
+}
+.ff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 20px;
+}
+.ff-studio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+.ff-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.ff-work video,
+.ff-preview video {
+  width: 100%;
+  max-height: 460px;
+  background: #090a0e;
+  border-radius: 8px;
+}
+.ff-work p {
+  opacity: 0.65;
+  font-size: 12px;
+}
+.ff-metric {
+  font-size: 32px;
+  font-weight: 600;
+  margin-top: 12px;
+}
+.ff-field {
+  margin-bottom: 20px;
+}
+.ff-field > label {
+  display: block;
+  margin-bottom: 8px;
+}
+.ff-preview {
+  min-height: 430px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.ff-theme {
+  display: flex;
+  gap: 4px;
+}
+.ff-page .ant-card {
+  background: var(--ff-surface);
+  border-color: var(--ff-border);
+}
+.ff-asset {
+  width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+}
+.ff-page table {
+  width: 100%;
+}
+.ff-page td,
+.ff-page th {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--ff-border);
+}
+@media (max-width: 800px) {
+  .ff-page {
+    padding: 16px;
+  }
+  .ff-studio {
+    grid-template-columns: 1fr;
+  }
+  .ff-theme .ant-btn {
+    padding-inline: 5px;
+    font-size: 11px;
+  }
+  .ff-page table {
+    font-size: 12px;
+  }
+  .ff-page td,
+  .ff-page th {
+    padding: 6px;
+  }
+  .ff-page h1 {
+    font-size: 24px;
+  }
+}
