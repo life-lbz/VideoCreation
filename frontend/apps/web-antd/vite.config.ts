@@ -1,6 +1,7 @@
 import { defineConfig } from '@vben/vite-config';
 
 export default defineConfig(async () => {
+  const apiTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:4173';
   return {
     application: {},
     vite: {
@@ -8,8 +9,7 @@ export default defineConfig(async () => {
         proxy: {
           '/api': {
             changeOrigin: true,
-            // mock代理目标地址
-            target: 'http://127.0.0.1:4173',
+            target: apiTarget,
             ws: true,
           },
         },

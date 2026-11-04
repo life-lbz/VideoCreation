@@ -14,6 +14,9 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+    def is_terminal(self) -> bool:
+        return self in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
 
 class GenerationInput(BaseModel):
     prompt: str = Field(min_length=4, max_length=1200)

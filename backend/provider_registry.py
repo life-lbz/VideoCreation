@@ -21,6 +21,7 @@ def create_provider(config: Settings = settings) -> VideoProvider:
                 fast_model_id=config.ark_fast_model_id,
                 base_url=config.ark_base_url,
                 watermark=config.ark_watermark,
+                timeout_ms=config.provider_request_timeout_ms,
             )
         )
     raise ValueError(f"Unsupported VIDEO_PROVIDER: {selected}")

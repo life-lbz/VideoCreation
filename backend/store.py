@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from backend.models import TaskStatus, VideoTask
+
+logger = logging.getLogger(__name__)
 
 
 PLANS: dict[str, dict[str, Any]] = {
@@ -50,12 +53,23 @@ class AppStore:
         self.path = Path(database_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._closed = False
         self._initialize()
+
+    def shutdown(self) -> None:
+        """标记已关闭。后续写入调用将直接返回，避免进程退出时的竞态。"""
+        with self._lock:
+            self._closed = True
+        active = self.list_active_tasks()
+        if active:
+            logger.info("shutdown: %d 个未完成任务已持久化，启动时将自动恢复", len(active))
+        logger.info("shutdown: store closed")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10, factory=ClosingConnection)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
     def _initialize(self) -> None:
@@ -166,11 +180,13 @@ class AppStore:
             connection.commit()
 
     def release(self, idempotency_key: str) -> None:
-        with self._connect() as connection:
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "UPDATE reservations SET state = 'released', settled_at = ? WHERE idempotency_key = ? AND state = 'reserved'",
                 (now_ms(), idempotency_key),
             )
+            connection.commit()
 
     @staticmethod
     def _task_payload(task: VideoTask) -> str:
@@ -180,7 +196,8 @@ class AppStore:
         return json.dumps(payload, ensure_ascii=False)
 
     def save_task(self, task: VideoTask) -> None:
-        with self._connect() as connection:
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 INSERT INTO tasks (task_id, idempotency_key, payload_json, status, updated_at)
@@ -196,40 +213,52 @@ class AppStore:
                 "UPDATE reservations SET task_id = ? WHERE idempotency_key = ?",
                 (task.id, task.idempotencyKey),
             )
+            connection.commit()
 
     def sync_task(self, task: VideoTask) -> None:
-        with self._lock:
-            self.save_task(task)
-            with self._connect() as connection:
-                if task.status == TaskStatus.SUCCEEDED:
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO tasks (task_id, idempotency_key, payload_json, status, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (task.id, task.idempotencyKey, self._task_payload(task), task.status.value, now_ms()),
+            )
+            if task.status == TaskStatus.SUCCEEDED:
+                connection.execute(
+                    "UPDATE reservations SET state = 'charged', settled_at = ? WHERE task_id = ? AND state = 'reserved'",
+                    (now_ms(), task.id),
+                )
+                if task.resultUrl:
+                    title = task.input.prompt.strip().rstrip("。！？")[:18] or "未命名作品"
                     connection.execute(
-                        "UPDATE reservations SET state = 'charged', settled_at = ? WHERE task_id = ? AND state = 'reserved'",
-                        (now_ms(), task.id),
+                        """
+                        INSERT OR IGNORE INTO works
+                        (task_id, title, prompt, ratio, duration, resolution, result_url, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            task.id,
+                            title,
+                            task.input.prompt,
+                            task.input.ratio,
+                            task.input.duration,
+                            task.input.resolution,
+                            task.resultUrl,
+                            task.completedAt or now_ms(),
+                        ),
                     )
-                    if task.resultUrl:
-                        title = task.input.prompt.strip().rstrip("。！？")[:18] or "未命名作品"
-                        connection.execute(
-                            """
-                            INSERT OR IGNORE INTO works
-                            (task_id, title, prompt, ratio, duration, resolution, result_url, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                task.id,
-                                title,
-                                task.input.prompt,
-                                task.input.ratio,
-                                task.input.duration,
-                                task.input.resolution,
-                                task.resultUrl,
-                                task.completedAt or now_ms(),
-                            ),
-                        )
-                elif task.status in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
-                    connection.execute(
-                        "UPDATE reservations SET state = 'released', settled_at = ? WHERE task_id = ? AND state = 'reserved'",
-                        (now_ms(), task.id),
-                    )
+            elif task.status in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
+                connection.execute(
+                    "UPDATE reservations SET state = 'released', settled_at = ? WHERE task_id = ? AND state = 'reserved'",
+                    (now_ms(), task.id),
+                )
+            connection.commit()
 
     def get_task_by_idempotency(self, idempotency_key: str) -> VideoTask | None:
         with self._connect() as connection:

@@ -47,9 +47,10 @@ def validate_input(provider_id, value):
 
 
 class PlatformVideoProvider(VolcengineVideoProvider):
-    def __init__(self, provider_id, api_key):
+    def __init__(self, provider_id, api_key, timeout_ms=30_000):
         self.provider_id = provider_id
         self.api_key = api_key
+        self._timeout_s = timeout_ms / 1000
         self._tasks = {}
         self._idempotency_index = {}
         self._lock = threading.RLock()
@@ -72,7 +73,7 @@ class PlatformVideoProvider(VolcengineVideoProvider):
             headers["X-DashScope-Async"] = "enable"
         request = urllib.request.Request(SPECS[self.provider_id]["baseUrl"] + path, data=json.dumps(payload).encode() if payload is not None else None, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
                 raw = response.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:

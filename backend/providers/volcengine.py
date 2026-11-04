@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import threading
 import time
@@ -11,6 +12,8 @@ from typing import Any
 
 from backend.models import CostEstimate, GenerationInput, TaskStatus, VideoTask
 from backend.providers.base import VideoProvider
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderNotConfiguredError(RuntimeError):
@@ -32,6 +35,7 @@ class VolcengineConfig:
     fast_model_id: str
     base_url: str
     watermark: bool = True
+    timeout_ms: int = 30_000
 
 
 class VolcengineVideoProvider(VideoProvider):
@@ -71,7 +75,7 @@ class VolcengineVideoProvider(VideoProvider):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=self.config.timeout_ms / 1000) as response:
                 raw = response.read()
                 return json.loads(raw.decode("utf-8")) if raw else {}
         except urllib.error.HTTPError as exc:
@@ -82,10 +86,13 @@ class VolcengineVideoProvider(VideoProvider):
             error = detail.get("error", detail) if isinstance(detail, dict) else {}
             code = str(error.get("code", "PROVIDER_HTTP_ERROR"))
             message = str(error.get("message", "视频供应商请求失败"))
-            # Providers may echo request details; never expose the bearer key.
             if self.config.api_key:
                 code = code.replace(self.config.api_key, "[redacted]")
                 message = message.replace(self.config.api_key, "[redacted]")
+            logger.warning(
+                "volcengine %s %s -> HTTP %s: %s %s",
+                method, path, exc.code, code, message,
+            )
             raise ProviderApiError(
                 code=code,
                 message=message,
@@ -93,6 +100,7 @@ class VolcengineVideoProvider(VideoProvider):
                 retryable=exc.code == 429 or exc.code >= 500,
             ) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
+            logger.warning("volcengine %s %s unreachable: %s", method, path, exc)
             raise ProviderApiError(
                 code="PROVIDER_UNAVAILABLE",
                 message="暂时无法连接视频供应商",
@@ -100,6 +108,7 @@ class VolcengineVideoProvider(VideoProvider):
                 retryable=True,
             ) from exc
         except json.JSONDecodeError as exc:
+            logger.exception("volcengine %s %s bad json", method, path)
             raise ProviderApiError(
                 code="INVALID_PROVIDER_RESPONSE",
                 message="视频供应商返回了无法解析的数据",
@@ -150,110 +159,122 @@ class VolcengineVideoProvider(VideoProvider):
                 and generation_input.resolution != "1080p"
             )
             model_id = self.config.fast_model_id if use_fast_model else self.config.model_id
-            response = self._request_json(
-                "POST",
-                "/contents/generations/tasks",
-                {
-                    "model": model_id,
-                    "content": [{"type": "text", "text": generation_input.prompt}],
-                    "ratio": generation_input.ratio,
-                    "duration": generation_input.duration,
-                    "resolution": generation_input.resolution,
-                    "generate_audio": generation_input.generateAudio,
-                    "watermark": self.config.watermark,
-                },
+            body = {
+                "model": model_id,
+                "content": [{"type": "text", "text": generation_input.prompt}],
+                "ratio": generation_input.ratio,
+                "duration": generation_input.duration,
+                "resolution": generation_input.resolution,
+                "generate_audio": generation_input.generateAudio,
+                "watermark": self.config.watermark,
+            }
+        response = self._request_json("POST", "/contents/generations/tasks", body)
+        external_id = str(response.get("id", ""))
+        if not external_id:
+            raise ProviderApiError(
+                "INVALID_PROVIDER_RESPONSE",
+                "视频供应商没有返回任务 ID",
+                retryable=True,
             )
-            external_id = str(response.get("id", ""))
-            if not external_id:
-                raise ProviderApiError(
-                    "INVALID_PROVIDER_RESPONSE",
-                    "视频供应商没有返回任务 ID",
-                    retryable=True,
-                )
-            created_at = int(time.time() * 1000)
-            task = VideoTask(
-                id=external_id,
-                externalTaskId=external_id,
-                idempotencyKey=idempotency_key,
-                status=TaskStatus.QUEUED,
-                progress=4,
-                stage="任务已提交到火山方舟",
-                createdAt=created_at,
-                input=generation_input,
-            )
+        task = VideoTask(
+            id=external_id,
+            externalTaskId=external_id,
+            idempotencyKey=idempotency_key,
+            status=TaskStatus.QUEUED,
+            progress=4,
+            stage="任务已提交到火山方舟",
+            createdAt=int(time.time() * 1000),
+            input=generation_input,
+        )
+        with self._lock:
             self._tasks[external_id] = task
             self._idempotency_index[idempotency_key] = external_id
-            return task
+        return task
 
     def get_task(self, task_id: str) -> VideoTask | None:
         with self._lock:
             local_task = self._tasks.get(task_id)
-            if local_task is None:
-                return None
-            response = self._request_json("GET", f"/contents/generations/tasks/{task_id}")
-            external_status = str(response.get("status", "queued"))
-            status_map = {
-                "queued": (TaskStatus.QUEUED, 12, "正在等待火山方舟创作资源"),
-                "running": (TaskStatus.GENERATING, 58, "Seedance 正在生成视频"),
-                "succeeded": (TaskStatus.SUCCEEDED, 100, "视频已经生成"),
-                "failed": (TaskStatus.FAILED, 100, "视频生成失败"),
-                "cancelled": (TaskStatus.CANCELLED, local_task.progress, "任务已取消"),
-                "expired": (TaskStatus.FAILED, 100, "视频任务已过期"),
+        if local_task is None:
+            return None
+        response = self._request_json("GET", f"/contents/generations/tasks/{task_id}")
+        external_status = str(response.get("status", "queued"))
+        status_map = {
+            "queued": (TaskStatus.QUEUED, 12, "正在等待火山方舟创作资源"),
+            "running": (TaskStatus.GENERATING, 58, "Seedance 正在生成视频"),
+            "succeeded": (TaskStatus.SUCCEEDED, 100, "视频已经生成"),
+            "failed": (TaskStatus.FAILED, 100, "视频生成失败"),
+            "cancelled": (TaskStatus.CANCELLED, local_task.progress, "任务已取消"),
+            "expired": (TaskStatus.FAILED, 100, "视频任务已过期"),
+        }
+        status_value, progress, stage = status_map.get(
+            external_status,
+            (TaskStatus.GENERATING, local_task.progress, "正在同步视频任务"),
+        )
+        content = response.get("content") or {}
+        video_url = content.get("video_url") if isinstance(content, dict) else None
+        provider_error = response.get("error") or {}
+        error_code = str(provider_error.get("code", "")) if isinstance(provider_error, dict) else ""
+        if self.config.api_key:
+            error_code = error_code.replace(self.config.api_key, "[redacted]")
+        error_message = None
+        action_url = None
+        if status_value == TaskStatus.FAILED:
+            if error_code == "SetLimitExceeded":
+                stage = "火山方舟额度或模型权限受限"
+                error_message = (
+                    "火山方舟已暂停该模型：账号达到安心体验模式推理上限。"
+                    "请前往模型开通管理调整或关闭安心体验模式后重试。"
+                )
+                action_url = self.MODEL_MANAGEMENT_URL
+            elif isinstance(provider_error, dict) and provider_error.get("message"):
+                error_message = str(provider_error["message"])
+                if self.config.api_key:
+                    error_message = error_message.replace(self.config.api_key, "[redacted]")
+            else:
+                error_message = "视频供应商未能完成该任务，请检查模型权限、余额和参数后重试。"
+        updated_at = int(time.time() * 1000)
+        updated = local_task.model_copy(
+            update={
+                "status": status_value,
+                "progress": progress,
+                "stage": stage,
+                "resultUrl": video_url,
+                "completedAt": updated_at if status_value == TaskStatus.SUCCEEDED else None,
+                "errorCode": error_code or None,
+                "errorMessage": error_message,
+                "actionUrl": action_url,
             }
-            status_value, progress, stage = status_map.get(
-                external_status,
-                (TaskStatus.GENERATING, local_task.progress, "正在同步视频任务"),
-            )
-            content = response.get("content") or {}
-            video_url = content.get("video_url") if isinstance(content, dict) else None
-            provider_error = response.get("error") or {}
-            error_code = str(provider_error.get("code", "")) if isinstance(provider_error, dict) else ""
-            if self.config.api_key:
-                error_code = error_code.replace(self.config.api_key, "[redacted]")
-            error_message = None
-            action_url = None
-            if status_value == TaskStatus.FAILED:
-                if error_code == "SetLimitExceeded":
-                    stage = "火山方舟额度或模型权限受限"
-                    error_message = (
-                        "火山方舟已暂停该模型：账号达到安心体验模式推理上限。"
-                        "请前往模型开通管理调整或关闭安心体验模式后重试。"
-                    )
-                    action_url = self.MODEL_MANAGEMENT_URL
-                elif isinstance(provider_error, dict) and provider_error.get("message"):
-                    error_message = str(provider_error["message"])
-                    if self.config.api_key:
-                        error_message = error_message.replace(self.config.api_key, "[redacted]")
-                else:
-                    error_message = "视频供应商未能完成该任务，请检查模型权限、余额和参数后重试。"
-            updated_at = int(time.time() * 1000)
-            updated = local_task.model_copy(
-                update={
-                    "status": status_value,
-                    "progress": progress,
-                    "stage": stage,
-                    "resultUrl": video_url,
-                    "completedAt": updated_at if status_value == TaskStatus.SUCCEEDED else None,
-                    "errorCode": error_code or None,
-                    "errorMessage": error_message,
-                    "actionUrl": action_url,
-                }
-            )
+        )
+        with self._lock:
             self._tasks[task_id] = updated
-            return updated
+            if updated.status.is_terminal():
+                self._tasks.pop(task_id, None)
+                self._idempotency_index.pop(local_task.idempotencyKey, None)
+        return updated
 
     def cancel_task(self, task_id: str) -> VideoTask | None:
         with self._lock:
             task = self._tasks.get(task_id)
             if task is None:
                 return None
+        # 幂等：已经 terminal 的任务不再发请求
+        if task.status.is_terminal():
+            return task
+        try:
             self._request_json("DELETE", f"/contents/generations/tasks/{task_id}")
-            cancelled = task.model_copy(
-                update={
-                    "status": TaskStatus.CANCELLED,
-                    "stage": "任务已取消",
-                    "cancelledAt": int(time.time() * 1000),
-                }
-            )
+        except ProviderApiError as exc:
+            if exc.status_code != 404:
+                raise
+            # 供应商已经没有该任务了，视为已取消
+        cancelled = task.model_copy(
+            update={
+                "status": TaskStatus.CANCELLED,
+                "stage": "任务已取消",
+                "cancelledAt": int(time.time() * 1000),
+            }
+        )
+        with self._lock:
             self._tasks[task_id] = cancelled
-            return cancelled
+            self._tasks.pop(task_id, None)
+            self._idempotency_index.pop(task.idempotencyKey, None)
+        return cancelled

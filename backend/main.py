@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
+import time
+import uuid
+from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
 
@@ -13,6 +17,7 @@ from pydantic import BaseModel, SecretStr, Field, ConfigDict
 from urllib.parse import urlsplit
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from backend import request_id_var
 from backend.config import settings
 from backend.models import ErrorDetail, ErrorResponse, GenerationInput
 from backend.provider_registry import create_provider
@@ -20,6 +25,8 @@ from backend.providers.volcengine import ProviderApiError, ProviderNotConfigured
 from backend.store import AppStore, InsufficientCreditsError
 from backend.video_settings import VideoSettings, ProviderRouter
 from backend.providers.platforms import SPECS, PlatformVideoProvider
+
+logger = logging.getLogger(__name__)
 
 PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
 
@@ -60,11 +67,23 @@ store = AppStore(settings.database_path)
 for persisted_task in store.list_active_tasks():
     provider.restore_task(persisted_task)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("FrameFlow Video Agent API started on %s:%s", settings.host, settings.port)
+    try:
+        yield
+    finally:
+        store.shutdown()
+        logger.info("FrameFlow Video Agent API shutting down")
+
+
 app = FastAPI(
     title="FrameFlow Video Agent API",
     version="0.1.0",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
+    lifespan=lifespan,
 )
 
 # Serialize configuration changes with the estimate/reserve/submit transaction.
@@ -87,7 +106,18 @@ def error_payload(code: str, message: str, retryable: bool = False) -> dict[str,
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
+    # 设置 X-Request-ID：客户端传了就沿用，否则生成一个短 UUID
+    incoming_id = request.headers.get("x-request-id")
+    req_id = (incoming_id[:64] if incoming_id else uuid.uuid4().hex[:12]) or uuid.uuid4().hex[:12]
+    request_id_var.set(req_id)
+
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.exception("unhandled error after %.1fms", elapsed_ms)
+        raise
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -97,6 +127,17 @@ async def add_security_headers(request: Request, call_next):
         "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
+    response.headers["X-Request-ID"] = req_id
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    path = request.url.path
+    slow_threshold_ms = int(os.getenv("SLOW_REQUEST_THRESHOLD_MS", "2000"))
+    if path.startswith("/api/"):
+        log_level = logging.WARNING if elapsed_ms > slow_threshold_ms else logging.INFO
+        logger.log(
+            log_level,
+            "request %s %s -> %d | %.1fms",
+            request.method, path, response.status_code, elapsed_ms,
+        )
     return response
 
 
@@ -104,6 +145,7 @@ async def add_security_headers(request: Request, call_next):
 async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     prompt_error = any(tuple(error.get("loc", ())) == ("body", "prompt") for error in exc.errors())
     message = "请输入 4 到 1200 个字符的创作描述" if prompt_error else "请求参数不符合要求"
+    logger.warning("validation error: %s", exc.errors())
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=error_payload("INVALID_REQUEST", message),
@@ -112,6 +154,7 @@ async def validation_error_handler(_request: Request, exc: RequestValidationErro
 
 @app.exception_handler(ProviderNotConfiguredError)
 async def provider_config_error_handler(_request: Request, exc: ProviderNotConfiguredError) -> JSONResponse:
+    logger.warning("provider not configured: %s", str(exc))
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content=error_payload(exc.code, "视频供应商尚未配置", retryable=False),
@@ -120,6 +163,8 @@ async def provider_config_error_handler(_request: Request, exc: ProviderNotConfi
 
 @app.exception_handler(ProviderApiError)
 async def provider_api_error_handler(_request: Request, exc: ProviderApiError) -> JSONResponse:
+    level = logging.WARNING if exc.status_code < 500 else logging.ERROR
+    logger.log(level, "provider api error [%s] HTTP %s: %s (retryable=%s)", exc.code, exc.status_code, str(exc), exc.retryable)
     return JSONResponse(
         status_code=exc.status_code,
         content=error_payload(exc.code, str(exc), retryable=exc.retryable),
@@ -128,6 +173,7 @@ async def provider_api_error_handler(_request: Request, exc: ProviderApiError) -
 
 @app.exception_handler(InsufficientCreditsError)
 async def insufficient_credits_handler(_request: Request, exc: InsufficientCreditsError) -> JSONResponse:
+    logger.info("credits insufficient: %s", str(exc))
     return JSONResponse(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         content=error_payload("INSUFFICIENT_CREDITS", str(exc), retryable=False),
@@ -141,13 +187,38 @@ async def http_error_handler(_request: Request, exc: StarletteHTTPException) -> 
     else:
         code = "TASK_NOT_FOUND" if exc.status_code == 404 else "HTTP_ERROR"
         content = error_payload(code, str(exc.detail))
+    if exc.status_code >= 500:
+        logger.error("HTTP %s: %s", exc.status_code, str(exc.detail))
     return JSONResponse(status_code=exc.status_code, content=content)
 
 
+@app.exception_handler(Exception)
+async def unexpected_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("unexpected error: %s", type(exc).__name__)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=error_payload("INTERNAL_ERROR", "服务暂时不可用，请稍后重试", retryable=True),
+    )
+
+
 @app.get("/api/health")
-def health() -> dict[str, str]:
+def health() -> JSONResponse:
     provider_name = str(provider.get_capabilities().get("provider", settings.video_provider))
-    return {"status": "ok", "provider": provider_name, "runtime": "python"}
+    result: dict[str, object] = {"status": "ok", "provider": provider_name, "runtime": "python"}
+    db_status = "ok"
+    db_error: str | None = None
+    try:
+        active = store.list_active_tasks()
+        result["pendingTasks"] = len(active)
+    except Exception as exc:  # noqa: BLE001 — DB 故障时要返回降级响应
+        db_status = "error"
+        db_error = type(exc).__name__
+        logger.error("health DB probe failed: %s", exc)
+    result["database"] = db_status
+    if db_error:
+        result["databaseError"] = db_error
+    http_status = status.HTTP_200_OK if db_status == "ok" else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(status_code=http_status, content=result)
 
 
 @app.get("/api/capabilities")

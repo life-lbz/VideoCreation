@@ -102,6 +102,9 @@ class MockVideoProvider(VideoProvider):
                 return None
             updated = current_task_state(task)
             self._tasks[task_id] = updated
+            if updated.status.is_terminal():
+                self._tasks.pop(task_id, None)
+                self._idempotency_index.pop(task.idempotencyKey, None)
             return updated
 
     def cancel_task(self, task_id: str) -> VideoTask | None:
@@ -109,7 +112,8 @@ class MockVideoProvider(VideoProvider):
             task = self._tasks.get(task_id)
             if task is None:
                 return None
-            if task.status == TaskStatus.SUCCEEDED:
+            if task.status == TaskStatus.SUCCEEDED or task.status.is_terminal():
+                self._idempotency_index.pop(task.idempotencyKey, None)
                 return task
             cancelled = task.model_copy(
                 update={
@@ -119,4 +123,5 @@ class MockVideoProvider(VideoProvider):
                 }
             )
             self._tasks[task_id] = cancelled
+            self._idempotency_index.pop(task.idempotencyKey, None)
             return cancelled
